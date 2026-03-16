@@ -64,8 +64,41 @@ exports.REELS_SNAP_SCRIPT = `
   }
 })();
 `;
-// ═══════════════════════════════════════════════════════════════════════════
-// WsFrameServer — tiny RFC-6455 server, binary broadcast only
+// Script injected after every page load — unmutes all video elements and
+// clicks the mute toggle button if Instagram rendered one.
+const UNMUTE_SCRIPT = `
+(function() {
+  function unmute() {
+    // 1. Unmute every <video> element directly
+    document.querySelectorAll('video').forEach(v => {
+      v.muted  = false;
+      v.volume = 1;
+    });
+    // 2. Click Instagram's mute button if it is visible
+    //    Instagram renders a speaker icon button when video is muted.
+    const muteSelectors = [
+      'button[aria-label*="mute" i]',
+      'button[aria-label*="unmute" i]',
+      'button[aria-label*="sound" i]',
+      'button[aria-label*="audio" i]',
+    ];
+    for (const sel of muteSelectors) {
+      const btn = document.querySelector(sel);
+      if (btn) { btn.click(); break; }
+    }
+  }
+
+  // Run immediately for any videos already in the DOM
+  unmute();
+
+  // Also watch for new videos added dynamically (Reels lazy-loads clips)
+  const obs = new MutationObserver(() => unmute());
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  // Disconnect after 10 s to avoid running forever on static pages
+  setTimeout(() => obs.disconnect(), 10000);
+})();
+`;
 //
 // Why roll our own instead of the 'ws' npm package?
 //   The extension has zero npm runtime deps. We keep it that way.
@@ -448,6 +481,111 @@ function findChromePath() {
     }
     return null;
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// hideFromTaskbar — Windows only
+//
+// Chrome at -32000,-32000 is off-screen but still shows in the taskbar
+// because every top-level window with WS_EX_APPWINDOW appears there.
+//
+// Fix: walk the full Chrome process tree with EnumWindows, then for each
+// window swap the extended styles:
+//   REMOVE  WS_EX_APPWINDOW  (0x00040000) — forces taskbar entry
+//   ADD     WS_EX_TOOLWINDOW (0x00000080) — tool windows never appear
+//
+// We do NOT minimise or hide the window — that would trigger rendering
+// throttle and kill the screencast.  The window stays live and renderable,
+// just invisible to the taskbar and Alt-Tab.
+// ═══════════════════════════════════════════════════════════════════════════
+function hideFromTaskbar(rootPid) {
+    if (process.platform !== 'win32') {
+        return;
+    }
+    const script = `
+Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class TaskbarHide {
+    public delegate bool EnumWndProc(IntPtr hwnd, IntPtr lp);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWndProc cb, IntPtr lp);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern int  GetWindowLong(IntPtr hwnd, int idx);
+    [DllImport("user32.dll")] public static extern int  SetWindowLong(IntPtr hwnd, int idx, int val);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+}
+"@
+
+function Get-ProcTree([int]$root) {
+    $ids = New-Object System.Collections.Generic.List[uint32]
+    $ids.Add([uint32]$root)
+    $all = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue
+    $q   = [System.Collections.Queue]::new(); $q.Enqueue($root)
+    while ($q.Count -gt 0) {
+        $cur = $q.Dequeue()
+        $all | Where-Object { $_.ParentProcessId -eq $cur } | ForEach-Object {
+            $ids.Add([uint32]$_.ProcessId); $q.Enqueue([int]$_.ProcessId)
+        }
+    }
+    return $ids
+}
+
+# Wait up to 10 s for Chrome to create its window
+$pids    = $null
+$deadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $deadline) {
+    $pids = Get-ProcTree ${rootPid}
+    if ($pids.Count -gt 0) { break }
+    Start-Sleep -Milliseconds 300
+}
+if (-not $pids) { exit 1 }
+
+$GWL_EXSTYLE       = -20
+$WS_EX_APPWINDOW   = 0x00040000
+$WS_EX_TOOLWINDOW  = 0x00000080
+$SWP_NOMOVE        = 0x0002
+$SWP_NOSIZE        = 0x0001
+$SWP_NOZORDER      = 0x0004
+$SWP_FRAMECHANGED  = 0x0020
+$SWP_FLAGS         = $SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_NOZORDER -bor $SWP_FRAMECHANGED
+
+# Retry loop — Chrome may still be creating windows for a few seconds
+$attempts = 0
+while ($attempts -lt 15) {
+    $found = $false
+    [TaskbarHide]::EnumWindows({
+        param([IntPtr]$hwnd, [IntPtr]$lp)
+        $pid = [uint32]0
+        [TaskbarHide]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+        if ($pids -contains $pid) {
+            $ex = [TaskbarHide]::GetWindowLong($hwnd, $GWL_EXSTYLE)
+            # Remove APPWINDOW, add TOOLWINDOW
+            $newEx = ($ex -band (-bnot $WS_EX_APPWINDOW)) -bor $WS_EX_TOOLWINDOW
+            if ($newEx -ne $ex) {
+                [TaskbarHide]::SetWindowLong($hwnd, $GWL_EXSTYLE, $newEx) | Out-Null
+                [TaskbarHide]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, 0, 0, $SWP_FLAGS) | Out-Null
+                $found = $true
+            }
+        }
+        return $true
+    }, [IntPtr]::Zero) | Out-Null
+    if ($found) { break }
+    $attempts++
+    Start-Sleep -Milliseconds 400
+}
+`;
+    try {
+        const ps1 = path.join(os.tmpdir(), 'vscode-reels-hide-taskbar.ps1');
+        fs.writeFileSync(ps1, script, 'utf8');
+        child_proc.spawn('powershell.exe', [
+            '-NoProfile', '-NonInteractive',
+            '-WindowStyle', 'Hidden',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', ps1,
+        ], { detached: true, stdio: 'ignore' }).unref();
+    }
+    catch { /* non-critical — Chrome still works, just shows in taskbar */ }
+}
 async function launchReelsWithCdp() {
     const chromePath = findChromePath();
     if (!chromePath) {
@@ -491,6 +629,10 @@ async function launchReelsWithCdp() {
     }
     const pid = child.pid;
     const cdp = await CdpSession.attach(cdpPort, 25000);
+    // Hide Chrome from the Windows taskbar and Alt-Tab switcher.
+    // Must be called after spawn (pid is known) but works asynchronously —
+    // it waits for Chrome to create its window before applying the style.
+    hideFromTaskbar(pid);
     await cdp.call('Page.enable');
     await cdp.call('Network.enable');
     // Lock viewport: deviceScaleFactor=1 → pixel space == DIP space → exact clicks
@@ -500,13 +642,12 @@ async function launchReelsWithCdp() {
         screenWidth: exports.REMOTE_W, screenHeight: exports.REMOTE_H,
     });
     await cdp.call('Network.setUserAgentOverride', { userAgent: MOBILE_UA });
-    // Auto-tap the Reels nav button once the page loads so Instagram enters
-    // the full-screen Reels viewer instead of staying on the home feed.
+    // Note: autoplay with sound is already handled by the --autoplay-policy=no-user-gesture-required
+    // Chrome launch flag. No CDP call needed here.
+    // After every page load: snap to Reels view AND unmute all videos.
     cdp.on('Page.loadEventFired', () => {
-        void cdp.call('Runtime.evaluate', {
-            expression: exports.REELS_SNAP_SCRIPT,
-            awaitPromise: false,
-        });
+        void cdp.call('Runtime.evaluate', { expression: exports.REELS_SNAP_SCRIPT, awaitPromise: false });
+        void cdp.call('Runtime.evaluate', { expression: UNMUTE_SCRIPT, awaitPromise: false });
     });
     return {
         cdp,
