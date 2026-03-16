@@ -7,7 +7,7 @@
   "publisher": "amitk21b-lr79ind",
   "repository": {
     "type": "git",
-    "url": "https://github.com/amit4317//vs-insta-scroll-extension"
+    "url": "https://github.com/amit4317/vs-insta-scroll-extension"
   },
   "engines": {
     "vscode": "^1.74.0"
@@ -68,7 +68,14 @@
       {
         "command": "vsInstaReels.open",
         "key": "ctrl+shift+i",
-        "mac": "cmd+shift+i"
+        "mac": "cmd+shift+i",
+        "when": "!inputFocus"
+      },
+      {
+        "command": "vsInstaReels.open",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorTextFocus"
       }
     ]
   },
