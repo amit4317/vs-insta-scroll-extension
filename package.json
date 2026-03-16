@@ -1,0 +1,86 @@
+{
+  "name": "watch-insta-reels-auto-scroll",
+  "displayName": "Watch Insta Reels - Auto Scroll",
+  "description": "Play Instagram Reels with optional DRM support inside VS Code using Chrome/Edge Widevine integration.",
+  "version": "0.1.0",
+  "icon": "logo.png",
+  "publisher": "amitk21b-lr79ind",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amit4317/vs-insta-reels"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:vsInstaReels.open",
+    "onCommand:vsInstaReels.openInVSCode",
+    "onCommand:vsInstaReels.launchWithDrm",
+    "onView:vsInstaReels.sidebar"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vsInstaReels.open",
+        "title": "Instagram Reels: Open Reels",
+        "category": "Reels",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "vsInstaReels.openInBrowser",
+        "title": "Instagram Reels: Open in browser",
+        "category": "Reels"
+      },
+      {
+        "command": "vsInstaReels.openInVSCode",
+        "title": "Instagram Reels: Open in VS Code",
+        "category": "Reels"
+      },
+      {
+        "command": "vsInstaReels.launchWithDrm",
+        "title": "Instagram Reels: Launch with DRM support (for in-editor playback)",
+        "category": "Reels"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vsInstaReels",
+          "title": "Instagram Reels",
+          "icon": "$(device-camera)"
+        }
+      ]
+    },
+    "views": {
+      "vsInstaReels": [
+        {
+          "type": "webview",
+          "id": "vsInstaReels.sidebar",
+          "name": "Reels"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "vsInstaReels.open",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.3.0"
+  }
+}
