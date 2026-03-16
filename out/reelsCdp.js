@@ -31,11 +31,11 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const child_proc = require("child_process");
-exports.REELS_URL = 'https://www.instagram.com/reels/';
-exports.REMOTE_W = 430;
-exports.REMOTE_H = 932;
-const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
-    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/21A331 Safari/604.1';
+const platforms_1 = require("./platforms");
+// Keep for back-compat with chameleon.ts / beatSync.ts that reference these
+exports.REELS_URL = platforms_1.PLATFORMS.instagram.url;
+exports.REMOTE_W = platforms_1.PLATFORMS.instagram.width;
+exports.REMOTE_H = platforms_1.PLATFORMS.instagram.height;
 // Script injected after page load — taps the Reels nav icon so Instagram
 // snaps into the full-screen TikTok-style Reels viewer automatically.
 exports.REELS_SNAP_SCRIPT = `
@@ -74,13 +74,13 @@ const UNMUTE_SCRIPT = `
       v.muted  = false;
       v.volume = 1;
     });
-    // 2. Click Instagram's mute button if it is visible
-    //    Instagram renders a speaker icon button when video is muted.
+    // 2. Click the unmute button, if any. YouTube may expose both "mute" and "unmute"
+    //    labels; prefer unmute to avoid toggling off again.
     const muteSelectors = [
-      'button[aria-label*="mute" i]',
       'button[aria-label*="unmute" i]',
       'button[aria-label*="sound" i]',
       'button[aria-label*="audio" i]',
+      'button[aria-label*="mute" i]',
     ];
     for (const sel of muteSelectors) {
       const btn = document.querySelector(sel);
@@ -586,16 +586,16 @@ while ($attempts -lt 15) {
     }
     catch { /* non-critical — Chrome still works, just shows in taskbar */ }
 }
-async function launchReelsWithCdp() {
+async function launchReelsWithCdp(platform = platforms_1.PLATFORMS.instagram) {
     const chromePath = findChromePath();
     if (!chromePath) {
         throw new Error('Chrome or Edge not found. Install Google Chrome and try again.');
     }
     const cdpPort = await getFreePort();
-    const profileDir = path.join(os.tmpdir(), 'vscode-reels-cdp-profile');
+    const profileDir = path.join(os.tmpdir(), platform.profileDir);
     const child = child_proc.spawn(chromePath, [
         `--remote-debugging-port=${cdpPort}`,
-        `--app=${exports.REELS_URL}`,
+        `--app=${platform.url}`,
         `--user-data-dir=${profileDir}`,
         // ── Renderer: SwiftShader software GL
         // --disable-gpu alone forces Chrome into an older, slower software path.
@@ -614,7 +614,7 @@ async function launchReelsWithCdp() {
         '--autoplay-policy=no-user-gesture-required',
         // ── Off-screen (not minimized — minimized triggers rendering throttle)
         '--window-position=-32000,-32000',
-        `--window-size=${exports.REMOTE_W},${exports.REMOTE_H}`,
+        `--window-size=${platform.width},${platform.height}`,
         // ── Clean UX
         '--no-first-run',
         '--no-default-browser-check',
@@ -637,17 +637,19 @@ async function launchReelsWithCdp() {
     await cdp.call('Network.enable');
     // Lock viewport: deviceScaleFactor=1 → pixel space == DIP space → exact clicks
     await cdp.call('Emulation.setDeviceMetricsOverride', {
-        width: exports.REMOTE_W, height: exports.REMOTE_H,
+        width: platform.width, height: platform.height,
         deviceScaleFactor: 1, mobile: true,
-        screenWidth: exports.REMOTE_W, screenHeight: exports.REMOTE_H,
+        screenWidth: platform.width, screenHeight: platform.height,
     });
-    await cdp.call('Network.setUserAgentOverride', { userAgent: MOBILE_UA });
+    await cdp.call('Network.setUserAgentOverride', { userAgent: platform.userAgent });
     // Note: autoplay with sound is already handled by the --autoplay-policy=no-user-gesture-required
     // Chrome launch flag. No CDP call needed here.
-    // After every page load: snap to Reels view AND unmute all videos.
+    // After every page load: snap into short-form feed AND unmute all videos.
     cdp.on('Page.loadEventFired', () => {
-        void cdp.call('Runtime.evaluate', { expression: exports.REELS_SNAP_SCRIPT, awaitPromise: false });
-        void cdp.call('Runtime.evaluate', { expression: UNMUTE_SCRIPT, awaitPromise: false });
+        void cdp.call('Runtime.evaluate', { expression: platform.snapScript, awaitPromise: false });
+        setTimeout(() => {
+            void cdp.call('Runtime.evaluate', { expression: UNMUTE_SCRIPT, awaitPromise: false });
+        }, platform.unmuteDelay);
     });
     return {
         cdp,

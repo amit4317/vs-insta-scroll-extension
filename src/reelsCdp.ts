@@ -25,14 +25,12 @@ import * as fs         from 'fs';
 import * as os         from 'os';
 import * as path       from 'path';
 import * as child_proc from 'child_process';
+import { PlatformConfig, PLATFORMS } from './platforms';
 
-export const REELS_URL = 'https://www.instagram.com/reels/';
-export const REMOTE_W  = 430;
-export const REMOTE_H  = 932;
-
-const MOBILE_UA =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
-  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/21A331 Safari/604.1';
+// Keep for back-compat with chameleon.ts / beatSync.ts that reference these
+export const REELS_URL = PLATFORMS.instagram.url;
+export const REMOTE_W  = PLATFORMS.instagram.width;
+export const REMOTE_H  = PLATFORMS.instagram.height;
 
 // Script injected after page load — taps the Reels nav icon so Instagram
 // snaps into the full-screen TikTok-style Reels viewer automatically.
@@ -534,16 +532,18 @@ while ($attempts -lt 15) {
 
 export interface ReelsSession { cdp: CdpSession; kill: () => void; }
 
-export async function launchReelsWithCdp(): Promise<ReelsSession> {
+export async function launchReelsWithCdp(
+  platform: PlatformConfig = PLATFORMS.instagram,
+): Promise<ReelsSession> {
   const chromePath = findChromePath();
   if (!chromePath) { throw new Error('Chrome or Edge not found. Install Google Chrome and try again.'); }
 
   const cdpPort    = await getFreePort();
-  const profileDir = path.join(os.tmpdir(), 'vscode-reels-cdp-profile');
+  const profileDir = path.join(os.tmpdir(), platform.profileDir);
 
   const child = child_proc.spawn(chromePath, [
     `--remote-debugging-port=${cdpPort}`,
-    `--app=${REELS_URL}`,
+    `--app=${platform.url}`,
     `--user-data-dir=${profileDir}`,
 
     // ── Renderer: SwiftShader software GL
@@ -566,7 +566,7 @@ export async function launchReelsWithCdp(): Promise<ReelsSession> {
 
     // ── Off-screen (not minimized — minimized triggers rendering throttle)
     '--window-position=-32000,-32000',
-    `--window-size=${REMOTE_W},${REMOTE_H}`,
+    `--window-size=${platform.width},${platform.height}`,
 
     // ── Clean UX
     '--no-first-run',
@@ -593,19 +593,21 @@ export async function launchReelsWithCdp(): Promise<ReelsSession> {
 
   // Lock viewport: deviceScaleFactor=1 → pixel space == DIP space → exact clicks
   await cdp.call('Emulation.setDeviceMetricsOverride', {
-    width: REMOTE_W, height: REMOTE_H,
+    width: platform.width, height: platform.height,
     deviceScaleFactor: 1, mobile: true,
-    screenWidth: REMOTE_W, screenHeight: REMOTE_H,
+    screenWidth: platform.width, screenHeight: platform.height,
   });
-  await cdp.call('Network.setUserAgentOverride', { userAgent: MOBILE_UA });
+  await cdp.call('Network.setUserAgentOverride', { userAgent: platform.userAgent });
 
   // Note: autoplay with sound is already handled by the --autoplay-policy=no-user-gesture-required
   // Chrome launch flag. No CDP call needed here.
 
-  // After every page load: snap to Reels view AND unmute all videos.
+  // After every page load: snap into short-form feed AND unmute all videos.
   cdp.on('Page.loadEventFired', () => {
-    void cdp.call('Runtime.evaluate', { expression: REELS_SNAP_SCRIPT, awaitPromise: false });
-    void cdp.call('Runtime.evaluate', { expression: UNMUTE_SCRIPT,     awaitPromise: false });
+    void cdp.call('Runtime.evaluate', { expression: platform.snapScript, awaitPromise: false });
+    setTimeout(() => {
+      void cdp.call('Runtime.evaluate', { expression: UNMUTE_SCRIPT, awaitPromise: false });
+    }, platform.unmuteDelay);
   });
 
   return {
