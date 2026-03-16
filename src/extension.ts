@@ -16,10 +16,16 @@ import { findChromePath, launchReelsWithCdp,
          WsFrameServer, CdpSession, ReelsSession,
          REELS_URL, REMOTE_W, REMOTE_H, getFreePort,
          sleep }                                      from './reelsCdp';
+import { BeatSync }                                   from './beatSync';
+import { ChameleonTheme }                             from './chameleon';
+import { SmartPause }                                 from './smartPause';
 
 // ── Global session state ─────────────────────────────────────────────────────
 let activeSession:  ReelsSession   | undefined;
 let activeWsServer: WsFrameServer  | undefined;
+let activeBeatSync:   BeatSync        | undefined;
+let activeChameleon:  ChameleonTheme  | undefined;
+let activeSmartPause: SmartPause      | undefined;
 
 // Cached window.innerHeight read from Chrome via CDP.
 // This is the real rendered page height — used for snap scroll distance.
@@ -119,13 +125,14 @@ function getPlayerHtml(nonce: string, wsPort: number): string {
       align-items:stretch;
     }
 
-    /* ── Top bar with close + auto-scroll buttons ── */
+    /* ── Top bar with close + auto-scroll + beat sync buttons ── */
     #bar{
       flex-shrink:0;
       display:flex;align-items:center;justify-content:space-between;
       padding:4px 6px;
       background:#111;
       border-bottom:1px solid #222;
+      gap:4px;
     }
     #btn-auto{
       background:transparent;border:1px solid #444;
@@ -137,10 +144,51 @@ function getPlayerHtml(nonce: string, wsPort: number): string {
       background:#1a3a1a;border-color:#3a7a3a;color:#6fbe6f;
     }
     #btn-auto:hover{ opacity:.85; }
+    #btn-beat{
+      background:transparent;border:1px solid #444;
+      color:#888;font-size:11px;cursor:pointer;
+      padding:3px 8px;border-radius:3px;line-height:1;
+      transition:all .2s;
+    }
+    #btn-beat.on{
+      border-color:#534AB7;color:#AFA9EC;
+      animation:beatglow 0.6s ease-in-out infinite alternate;
+    }
+    @keyframes beatglow{
+      from{background:transparent}
+      to{background:#1a1535}
+    }
+    #btn-beat:hover{ opacity:.85; }
+    #btn-cham{
+      background:transparent;border:1px solid #444;
+      color:#888;font-size:11px;cursor:pointer;
+      padding:3px 8px;border-radius:3px;line-height:1;
+      transition:all .2s;
+    }
+    #btn-cham.on{
+      border-color:#1D9E75;color:#9FE1CB;
+      animation:chamglow 1.5s ease-in-out infinite alternate;
+    }
+    @keyframes chamglow{
+      from{background:transparent}
+      to{background:#0a2018}
+    }
+    #btn-cham:hover{ opacity:.85; }
+    #btn-smart{
+      background:transparent;border:1px solid #444;
+      color:#888;font-size:11px;cursor:pointer;
+      padding:3px 8px;border-radius:3px;line-height:1;
+      transition:all .2s;
+    }
+    #btn-smart.on{
+      border-color:#BA7517;color:#FAC775;
+    }
+    #btn-smart:hover{ opacity:.85; }
     #btn-close{
       background:transparent;border:none;
       color:#888;font-size:16px;cursor:pointer;
       padding:2px 6px;border-radius:3px;line-height:1;
+      margin-left:auto;
     }
     #btn-close:hover{color:#ccc;background:#222}
 
@@ -170,8 +218,11 @@ function getPlayerHtml(nonce: string, wsPort: number): string {
 </head>
 <body>
   <div id="bar">
-    <button id="btn-auto" title="Auto-scroll to next reel when video ends">⟳ Auto Scroll</button>
-    <button id="btn-close" title="Close Reels">✕</button>
+    <button id="btn-auto"  title="Auto-scroll to next reel when video ends">&#8635; Auto</button>
+    <button id="btn-beat"  title="Beat Sync — VS Code pulses to the reel audio">&#9835; Beat</button>
+    <button id="btn-cham"  title="Chameleon — VS Code colors match the reel">&#9680; Colors</button>
+    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart Pause</button>
+    <button id="btn-close" title="Close Reels">&#10005;</button>
   </div>
   <div id="wrap">
     <canvas id="c" tabindex="0" width="${REMOTE_W}" height="${REMOTE_H}"></canvas>
@@ -196,6 +247,18 @@ function getPlayerHtml(nonce: string, wsPort: number): string {
     // Auto-scroll toggle
     const btnAuto = document.getElementById('btn-auto');
     btnAuto.onclick = () => api.postMessage({command:'toggleAutoScroll'});
+
+    // Beat Sync toggle
+    const btnBeat = document.getElementById('btn-beat');
+    btnBeat.onclick = () => api.postMessage({command:'toggleBeatSync'});
+
+    // Chameleon theme toggle
+    const btnCham = document.getElementById('btn-cham');
+    btnCham.onclick = () => api.postMessage({command:'toggleChameleon'});
+
+    // Smart Pause toggle
+    const btnSmart = document.getElementById('btn-smart');
+    btnSmart.onclick = () => api.postMessage({command:'toggleSmartPause'});
 
     // ── Producer/consumer JPEG decode pipeline ────────────────────────────
     let pending  = null;
@@ -241,13 +304,25 @@ function getPlayerHtml(nonce: string, wsPort: number): string {
     }
     connect();
 
-    // Control messages (status / die / autoScrollState)
+    // Control messages (status / die / autoScrollState / beatSyncState)
     window.addEventListener('message', e => {
       if (e.data?.type==='status') { stEl.textContent=e.data.text; }
       if (e.data?.type==='die')    { alive=false; ws?.close(); }
       if (e.data?.type==='autoScrollState') {
         btnAuto.classList.toggle('on', !!e.data.on);
-        btnAuto.textContent = e.data.on ? '⟳ Auto: ON' : '⟳ Auto Scroll';
+        btnAuto.textContent = e.data.on ? '\u21BA Auto: ON' : '\u21BA Auto Scroll';
+      }
+      if (e.data?.type==='beatSyncState') {
+        btnBeat.classList.toggle('on', !!e.data.on);
+        btnBeat.textContent = e.data.on ? '\u266B Beat: ON' : '\u266B Beat Sync';
+      }
+      if (e.data?.type==='chameleonState') {
+        btnCham.classList.toggle('on', !!e.data.on);
+        btnCham.textContent = e.data.on ? '\u25D0 Colors: ON' : '\u25D0 Colors';
+      }
+      if (e.data?.type==='smartPauseState') {
+        btnSmart.classList.toggle('on', !!e.data.on);
+        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart Pause';
       }
     });
 
@@ -642,6 +717,48 @@ function updateAutoScrollButton(on: boolean): void {
   void sidebarView?.webview.postMessage({ type: 'autoScrollState', on });
 }
 
+// ── Beat Sync ────────────────────────────────────────────────────────────────
+
+async function toggleBeatSync(): Promise<void> {
+  if (!activeSession) { return; }
+
+  if (activeBeatSync) {
+    activeBeatSync.dispose();
+    activeBeatSync = undefined;
+    void sidebarView?.webview.postMessage({ type:'beatSyncState', on:false });
+  } else {
+    activeBeatSync = new BeatSync(activeSession.cdp);
+    await activeBeatSync.start();
+    void sidebarView?.webview.postMessage({ type:'beatSyncState', on:true });
+  }
+}
+
+async function toggleChameleon(): Promise<void> {
+  if (!activeSession) { return; }
+  if (activeChameleon) {
+    activeChameleon.dispose();
+    activeChameleon = undefined;
+    void sidebarView?.webview.postMessage({ type:'chameleonState', on:false });
+  } else {
+    activeChameleon = new ChameleonTheme(activeSession.cdp);
+    await activeChameleon.start();
+    void sidebarView?.webview.postMessage({ type:'chameleonState', on:true });
+  }
+}
+
+function toggleSmartPause(): void {
+  if (!activeSession) { return; }
+  if (activeSmartPause) {
+    activeSmartPause.dispose();
+    activeSmartPause = undefined;
+    void sidebarView?.webview.postMessage({ type:'smartPauseState', on:false });
+  } else {
+    activeSmartPause = new SmartPause(activeSession.cdp);
+    activeSmartPause.start();
+    void sidebarView?.webview.postMessage({ type:'smartPauseState', on:true });
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Screencast → WsFrameServer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -767,6 +884,18 @@ async function openReels(context: vscode.ExtensionContext): Promise<void> {
           else if (activeSession) { startAutoScroll(activeSession.cdp); }
           return;
         }
+        if (cmd === 'toggleBeatSync') {
+          void toggleBeatSync();
+          return;
+        }
+        if (cmd === 'toggleChameleon') {
+          void toggleChameleon();
+          return;
+        }
+        if (cmd === 'toggleSmartPause') {
+          toggleSmartPause();
+          return;
+        }
         if (msg['type'] === 'input' && activeSession) {
           forwardInput(activeSession.cdp, msg);
         }
@@ -809,13 +938,22 @@ async function openReels(context: vscode.ExtensionContext): Promise<void> {
 
 function closeReels(): void {
   stopAutoScroll();
+
+  activeBeatSync?.dispose();
+  activeBeatSync = undefined;
+
+  activeChameleon?.dispose();
+  activeChameleon = undefined;
+
+  activeSmartPause?.dispose();
+  activeSmartPause = undefined;
+
   void sidebarView?.webview.postMessage({ type:'die' });
 
   activeWsServer?.close(); activeWsServer = undefined;
   activeSession?.kill();   activeSession  = undefined;
-  cachedViewportH = REMOTE_H; // reset for next session
+  cachedViewportH = REMOTE_H;
 
-  // Revert sidebar to the idle button view
   if (sidebarView) {
     sidebarView.webview.html = getIdleHtml();
   }
