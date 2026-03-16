@@ -1,15 +1,18 @@
 ﻿# Instagram Reels for VS Code
 
 Play Instagram Reels directly inside VS Code with an optional DRM mode using Widevine CDM.
+![Alt text](images/image1.png)
+![Alt text](images/image2.png)
+![Alt text](images/image3.png)
 
-## Marketplace-friendly summary
+## Watch Insta Reels Summary
 
 - Adds a sidebar and commands to open Instagram Reels in VS Code Simple Browser.
 - Supports DRM by launching a new editor window with Widevine path/flags from Chrome/Edge.
 - Includes fallback command to open Reels in your default browser.
 
 ## Features
-
+![Alt text](images/autoscroll.png)
 - Reels: Open Reels — opens a Reels view in the built-in browser.
 - Reels: Launch with DRM support — starts a new window with Widevine for DRM playback.
 - Reels: Open in VS Code — open inside the current window.
@@ -29,12 +32,6 @@ If DRM playback does not work, use Reels: Open in browser.
 - Open your Instagram account with an active Internet connection.
 - VS Code or Cursor with built-in Simple Browser.
 
-## Dev setup
-
-`ash
-npm install
-npm run compile
-`
 
 Then press **F5** to test in Extension Development Host.
 
