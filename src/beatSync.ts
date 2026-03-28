@@ -75,7 +75,6 @@ const BEAT_DETECTION_SCRIPT = `
   let history   = [];
   let lastBeat  = 0;
   let lastVideo = null;
-  let rafId     = null;
 
   function connectVideo(video) {
     if (video === lastVideo) { return; }
@@ -111,7 +110,9 @@ const BEAT_DETECTION_SCRIPT = `
   }
 
   function tick() {
-    rafId = requestAnimationFrame(tick);
+    const rafId = requestAnimationFrame(tick);
+    // Expose rafId globally so stop() can cancel it
+    (window as any).__beatRafId = rafId;
 
     const video = getBestVideo();
     if (!video) { return; }

@@ -19,12 +19,22 @@ const reelsCdp_1 = require("./reelsCdp");
 const beatSync_1 = require("./beatSync");
 const chameleon_1 = require("./chameleon");
 const smartPause_1 = require("./smartPause");
+const sessionTimer_1 = require("./sessionTimer");
+const keyboardShortcuts_1 = require("./keyboardShortcuts");
+const watchHistory_1 = require("./watchHistory");
+const focusMode_1 = require("./focusMode");
+const platforms_1 = require("./platforms");
 // ── Global session state ─────────────────────────────────────────────────────
 let activeSession;
 let activeWsServer;
 let activeBeatSync;
 let activeChameleon;
 let activeSmartPause;
+let activeSessionTimer;
+let activeKeyboard;
+let activeWatchHistory;
+let activeFocusMode;
+let activePlatform = platforms_1.PLATFORMS[platforms_1.DEFAULT_PLATFORM];
 // Cached window.innerHeight read from Chrome via CDP.
 // This is the real rendered page height — used for snap scroll distance.
 // Falls back to REMOTE_H until the first CDP read completes.
@@ -47,7 +57,7 @@ const VK = {
 // ═══════════════════════════════════════════════════════════════════════════
 // HTML: idle state — just the Open button
 // ═══════════════════════════════════════════════════════════════════════════
-function getIdleHtml() {
+function getIdleHtml(selectedId = 'instagram') {
     const csp = [
         "default-src 'none'",
         "style-src 'unsafe-inline'",
@@ -63,25 +73,56 @@ function getIdleHtml() {
   <style>
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;width:100%;font-family:var(--vscode-font-family)}
-    .w{padding:14px;display:flex;flex-direction:column;gap:9px}
-    h3{margin:0 0 2px;font-size:13px;color:var(--vscode-foreground)}
+    .w{padding:12px;display:flex;flex-direction:column;gap:8px}
     p{margin:0;font-size:12px;color:var(--vscode-descriptionForeground);line-height:1.5}
+    .label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;
+           color:var(--vscode-descriptionForeground);opacity:.55;margin:0}
+    .platforms{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+    .plat{padding:8px 4px;border-radius:6px;cursor:pointer;
+          border:1px solid var(--vscode-widget-border,#444);
+          background:transparent;color:var(--vscode-descriptionForeground);
+          font-size:11px;text-align:center;transition:all .15s;line-height:1.4}
+    .plat:hover{border-color:var(--vscode-focusBorder);color:var(--vscode-foreground)}
+    .plat.active{border-color:var(--vscode-button-background);
+                 background:var(--vscode-button-background);
+                 color:var(--vscode-button-foreground)}
+    .icon{font-size:16px;display:block;margin-bottom:3px}
     .btn{display:block;width:100%;padding:8px 12px;border-radius:4px;cursor:pointer;
-         font-size:12px;border:none;text-align:center;margin-top:4px}
-    .p{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
-    .p:hover{background:var(--vscode-button-hoverBackground)}
+         font-size:12px;border:none;text-align:center}
+    .go{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
+    .go:hover{background:var(--vscode-button-hoverBackground)}
   </style>
 </head>
 <body>
   <div class="w">
-    <h3>Instagram Reels</h3>
-    <p>Streams Chrome directly into this panel.</p>
-    <button class="btn p" id="open">▶  Open Reels</button>
+    <p class="label">Choose platform</p>
+    <div class="platforms">
+      <button class="plat${selectedId === 'instagram' ? ' active' : ''}" data-id="instagram">
+        <span class="icon">&#128247;</span>Instagram
+      </button>
+      <button class="plat${selectedId === 'tiktok' ? ' active' : ''}" data-id="tiktok">
+        <span class="icon">&#9654;</span>TikTok
+      </button>
+      <button class="plat${selectedId === 'youtube' ? ' active' : ''}" data-id="youtube">
+        <span class="icon">&#127916;</span>Shorts
+      </button>
+    </div>
+    <button class="btn go" id="open">&#9654;&#xFE0E;  Open</button>
   </div>
   <script>
     (function(){
       const api = typeof acquireVsCodeApi==='function' ? acquireVsCodeApi() : null;
-      document.getElementById('open').onclick = () => api && api.postMessage({command:'openReels'});
+      let sel = '${selectedId}';
+      document.querySelectorAll('.plat').forEach(btn => {
+        btn.onclick = function() {
+          document.querySelectorAll('.plat').forEach(b => b.classList.remove('active'));
+          this.classList.add('active');
+          sel = this.dataset.id;
+          if (api) { api.postMessage({command:'selectPlatform', id: sel}); }
+        };
+      });
+      document.getElementById('open').onclick = () =>
+        api && api.postMessage({command:'openReels', id: sel});
     })();
   </script>
 </body>
@@ -90,7 +131,7 @@ function getIdleHtml() {
 // ═══════════════════════════════════════════════════════════════════════════
 // HTML: playing state — full canvas + WS client, no buttons
 // ═══════════════════════════════════════════════════════════════════════════
-function getPlayerHtml(nonce, wsPort) {
+function getPlayerHtml(nonce, wsPort, pw = reelsCdp_1.REMOTE_W, ph = reelsCdp_1.REMOTE_H) {
     const csp = [
         "default-src 'none'",
         `script-src 'nonce-${nonce}'`,
@@ -210,11 +251,12 @@ function getPlayerHtml(nonce, wsPort) {
     <button id="btn-auto"  title="Auto-scroll to next reel when video ends">&#8635; Auto</button>
     <button id="btn-beat"  title="Beat Sync — VS Code pulses to the reel audio">&#9835; Beat</button>
     <button id="btn-cham"  title="Chameleon — VS Code colors match the reel">&#9680; Colors</button>
-    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart Pause</button>
+    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart</button>
+    <button id="btn-focus" title="Focus Mode — hide distractions">&#128065; Focus</button>
     <button id="btn-close" title="Close Reels">&#10005;</button>
   </div>
   <div id="wrap">
-    <canvas id="c" tabindex="0" width="${reelsCdp_1.REMOTE_W}" height="${reelsCdp_1.REMOTE_H}"></canvas>
+    <canvas id="c" tabindex="0" width="${pw}" height="${ph}"></canvas>
     <div id="loading"><div class="spin"></div><span id="st">Connecting…</span></div>
   </div>
 
@@ -226,8 +268,8 @@ function getPlayerHtml(nonce, wsPort) {
     const load   = document.getElementById('loading');
     const stEl   = document.getElementById('st');
 
-    const RW = ${reelsCdp_1.REMOTE_W};
-    const RH = ${reelsCdp_1.REMOTE_H};
+    const RW = ${pw};
+    const RH = ${ph};
 
     // Close button → tell host to tear down
     document.getElementById('btn-close').onclick = () =>
@@ -248,6 +290,10 @@ function getPlayerHtml(nonce, wsPort) {
     // Smart Pause toggle
     const btnSmart = document.getElementById('btn-smart');
     btnSmart.onclick = () => api.postMessage({command:'toggleSmartPause'});
+
+    // Focus Mode toggle
+    const btnFocus = document.getElementById('btn-focus');
+    btnFocus.onclick = () => api.postMessage({command:'toggleFocusMode'});
 
     // ── Producer/consumer JPEG decode pipeline ────────────────────────────
     let pending  = null;
@@ -311,7 +357,11 @@ function getPlayerHtml(nonce, wsPort) {
       }
       if (e.data?.type==='smartPauseState') {
         btnSmart.classList.toggle('on', !!e.data.on);
-        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart Pause';
+        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart';
+      }
+      if (e.data?.type==='focusModeState') {
+        btnFocus.classList.toggle('on', !!e.data.on);
+        btnFocus.textContent = e.data.on ? '\uD83D\uDC41 Focus: ON' : '\uD83D\uDC41 Focus';
       }
     });
 
@@ -413,9 +463,13 @@ function getPlayerHtml(nonce, wsPort) {
         return;
       }
       const mods=(e.altKey?1:0)|(e.ctrlKey?2:0)|(e.metaKey?4:0)|(e.shiftKey?8:0);
-      api.postMessage({type:'input',event:'keydown',key:e.key,code:e.code,modifiers:mods});
       if (e.key.length===1&&!e.ctrlKey&&!e.metaKey) {
+        // Printable character: send ONLY char event.
+        // rawKeyDown + char causes double insertion in React inputs (Instagram/TikTok).
         api.postMessage({type:'input',event:'char',text:e.key,modifiers:mods});
+      } else {
+        // Non-printable key (Enter, Backspace, Tab, F-keys...): rawKeyDown only.
+        api.postMessage({type:'input',event:'keydown',key:e.key,code:e.code,modifiers:mods});
       }
     });
     canvas.addEventListener('keyup', e=>{
@@ -730,6 +784,13 @@ function toggleSmartPause() {
         void sidebarView?.webview.postMessage({ type: 'smartPauseState', on: true });
     }
 }
+async function toggleFocusMode() {
+    if (!activeFocusMode) {
+        activeFocusMode = new focusMode_1.FocusMode();
+    }
+    const isActive = await activeFocusMode.toggle();
+    void sidebarView?.webview.postMessage({ type: 'focusModeState', on: isActive });
+}
 // ═══════════════════════════════════════════════════════════════════════════
 // Screencast → WsFrameServer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -824,12 +885,15 @@ function forwardInput(cdp, msg) {
 // ═══════════════════════════════════════════════════════════════════════════
 // Open / close — both operate directly on sidebarView
 // ═══════════════════════════════════════════════════════════════════════════
-async function openReels(context) {
+async function openReels(context, platformId) {
     if (activeSession) {
         return;
     } // already running
+    if (platformId) {
+        activePlatform = platforms_1.PLATFORMS[platformId];
+    }
     if (!(0, reelsCdp_1.findChromePath)()) {
-        void vscode.window.showErrorMessage('Instagram Reels: Chrome or Edge not found. Install Google Chrome and try again.');
+        void vscode.window.showErrorMessage(`${activePlatform.label}: Chrome or Edge not found. Install Google Chrome and try again.`);
         return;
     }
     const wsPort = await (0, reelsCdp_1.getFreePort)();
@@ -841,7 +905,7 @@ async function openReels(context) {
             enableScripts: true,
             localResourceRoots: [],
         };
-        sidebarView.webview.html = getPlayerHtml(nonce, wsPort);
+        sidebarView.webview.html = getPlayerHtml(nonce, wsPort, activePlatform.width, activePlatform.height);
         // Wire input + close from the player HTML
         sidebarView.webview.onDidReceiveMessage((msg) => {
             const cmd = msg['command'];
@@ -878,7 +942,7 @@ async function openReels(context) {
     const setStatus = (t) => void sidebarView?.webview.postMessage({ type: 'status', text: t });
     setStatus('Launching Chrome…');
     try {
-        activeSession = await (0, reelsCdp_1.launchReelsWithCdp)();
+        activeSession = await (0, reelsCdp_1.launchReelsWithCdp)(activePlatform);
         setStatus('Starting stream…');
         // Read the real window.innerHeight from Chrome now and on every navigation.
         // This is the correct snap distance — accounts for Instagram's own nav bars.
@@ -894,6 +958,11 @@ async function openReels(context) {
             void vscode.window.showWarningMessage('Reels: Chrome disconnected.');
             closeReels();
         });
+        // Initialize new features
+        activeSessionTimer = new sessionTimer_1.SessionTimer(30, 20);
+        activeSessionTimer.start();
+        activeKeyboard = new keyboardShortcuts_1.KeyboardShortcuts(activeSession.cdp);
+        activeWatchHistory = new watchHistory_1.WatchHistory(context);
     }
     catch (err) {
         void vscode.window.showErrorMessage('Instagram Reels: ' + (err instanceof Error ? err.message : String(err)));
@@ -908,14 +977,22 @@ function closeReels() {
     activeChameleon = undefined;
     activeSmartPause?.dispose();
     activeSmartPause = undefined;
+    activeSessionTimer?.dispose();
+    activeSessionTimer = undefined;
+    activeKeyboard?.dispose();
+    activeKeyboard = undefined;
+    activeWatchHistory?.dispose();
+    activeWatchHistory = undefined;
+    activeFocusMode?.dispose();
+    activeFocusMode = undefined;
     void sidebarView?.webview.postMessage({ type: 'die' });
     activeWsServer?.close();
     activeWsServer = undefined;
     activeSession?.kill();
     activeSession = undefined;
-    cachedViewportH = reelsCdp_1.REMOTE_H;
+    cachedViewportH = activePlatform.height;
     if (sidebarView) {
-        sidebarView.webview.html = getIdleHtml();
+        sidebarView.webview.html = getIdleHtml(activePlatform.id);
     }
 }
 // ═══════════════════════════════════════════════════════════════════════════
@@ -928,15 +1005,23 @@ class ReelsViewProvider {
     resolveWebviewView(view, _context, _token) {
         sidebarView = view;
         view.webview.options = { enableScripts: true, localResourceRoots: [] };
-        view.webview.html = getIdleHtml();
+        view.webview.html = getIdleHtml(activePlatform.id);
         // Handle messages from the IDLE view (Open button)
         view.webview.onDidReceiveMessage(async (msg) => {
             switch (msg.command) {
                 case 'openReels':
-                    await openReels(this._ctx);
+                    await openReels(this._ctx, msg.id);
                     break;
                 case 'closeReels':
                     closeReels();
+                    break;
+                case 'selectPlatform':
+                    {
+                        const pid = msg.id;
+                        if (platforms_1.PLATFORMS[pid]) {
+                            activePlatform = platforms_1.PLATFORMS[pid];
+                        }
+                    }
                     break;
             }
         });
