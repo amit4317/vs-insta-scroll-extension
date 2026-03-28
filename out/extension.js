@@ -19,6 +19,10 @@ const reelsCdp_1 = require("./reelsCdp");
 const beatSync_1 = require("./beatSync");
 const chameleon_1 = require("./chameleon");
 const smartPause_1 = require("./smartPause");
+const sessionTimer_1 = require("./sessionTimer");
+const keyboardShortcuts_1 = require("./keyboardShortcuts");
+const watchHistory_1 = require("./watchHistory");
+const focusMode_1 = require("./focusMode");
 const platforms_1 = require("./platforms");
 // ── Global session state ─────────────────────────────────────────────────────
 let activeSession;
@@ -26,6 +30,10 @@ let activeWsServer;
 let activeBeatSync;
 let activeChameleon;
 let activeSmartPause;
+let activeSessionTimer;
+let activeKeyboard;
+let activeWatchHistory;
+let activeFocusMode;
 let activePlatform = platforms_1.PLATFORMS[platforms_1.DEFAULT_PLATFORM];
 // Cached window.innerHeight read from Chrome via CDP.
 // This is the real rendered page height — used for snap scroll distance.
@@ -243,7 +251,8 @@ function getPlayerHtml(nonce, wsPort, pw = reelsCdp_1.REMOTE_W, ph = reelsCdp_1.
     <button id="btn-auto"  title="Auto-scroll to next reel when video ends">&#8635; Auto</button>
     <button id="btn-beat"  title="Beat Sync — VS Code pulses to the reel audio">&#9835; Beat</button>
     <button id="btn-cham"  title="Chameleon — VS Code colors match the reel">&#9680; Colors</button>
-    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart Pause</button>
+    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart</button>
+    <button id="btn-focus" title="Focus Mode — hide distractions">&#128065; Focus</button>
     <button id="btn-close" title="Close Reels">&#10005;</button>
   </div>
   <div id="wrap">
@@ -281,6 +290,10 @@ function getPlayerHtml(nonce, wsPort, pw = reelsCdp_1.REMOTE_W, ph = reelsCdp_1.
     // Smart Pause toggle
     const btnSmart = document.getElementById('btn-smart');
     btnSmart.onclick = () => api.postMessage({command:'toggleSmartPause'});
+
+    // Focus Mode toggle
+    const btnFocus = document.getElementById('btn-focus');
+    btnFocus.onclick = () => api.postMessage({command:'toggleFocusMode'});
 
     // ── Producer/consumer JPEG decode pipeline ────────────────────────────
     let pending  = null;
@@ -344,7 +357,11 @@ function getPlayerHtml(nonce, wsPort, pw = reelsCdp_1.REMOTE_W, ph = reelsCdp_1.
       }
       if (e.data?.type==='smartPauseState') {
         btnSmart.classList.toggle('on', !!e.data.on);
-        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart Pause';
+        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart';
+      }
+      if (e.data?.type==='focusModeState') {
+        btnFocus.classList.toggle('on', !!e.data.on);
+        btnFocus.textContent = e.data.on ? '\uD83D\uDC41 Focus: ON' : '\uD83D\uDC41 Focus';
       }
     });
 
@@ -767,6 +784,13 @@ function toggleSmartPause() {
         void sidebarView?.webview.postMessage({ type: 'smartPauseState', on: true });
     }
 }
+async function toggleFocusMode() {
+    if (!activeFocusMode) {
+        activeFocusMode = new focusMode_1.FocusMode();
+    }
+    const isActive = await activeFocusMode.toggle();
+    void sidebarView?.webview.postMessage({ type: 'focusModeState', on: isActive });
+}
 // ═══════════════════════════════════════════════════════════════════════════
 // Screencast → WsFrameServer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -934,6 +958,11 @@ async function openReels(context, platformId) {
             void vscode.window.showWarningMessage('Reels: Chrome disconnected.');
             closeReels();
         });
+        // Initialize new features
+        activeSessionTimer = new sessionTimer_1.SessionTimer(30, 20);
+        activeSessionTimer.start();
+        activeKeyboard = new keyboardShortcuts_1.KeyboardShortcuts(activeSession.cdp);
+        activeWatchHistory = new watchHistory_1.WatchHistory(context);
     }
     catch (err) {
         void vscode.window.showErrorMessage('Instagram Reels: ' + (err instanceof Error ? err.message : String(err)));
@@ -948,6 +977,14 @@ function closeReels() {
     activeChameleon = undefined;
     activeSmartPause?.dispose();
     activeSmartPause = undefined;
+    activeSessionTimer?.dispose();
+    activeSessionTimer = undefined;
+    activeKeyboard?.dispose();
+    activeKeyboard = undefined;
+    activeWatchHistory?.dispose();
+    activeWatchHistory = undefined;
+    activeFocusMode?.dispose();
+    activeFocusMode = undefined;
     void sidebarView?.webview.postMessage({ type: 'die' });
     activeWsServer?.close();
     activeWsServer = undefined;

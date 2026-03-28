@@ -74,13 +74,13 @@ const UNMUTE_SCRIPT = `
       v.muted  = false;
       v.volume = 1;
     });
-    // 2. Click the unmute button, if any. YouTube may expose both "mute" and "unmute"
-    //    labels; prefer unmute to avoid toggling off again.
+    // 2. Click Instagram's mute button if it is visible
+    //    Instagram renders a speaker icon button when video is muted.
     const muteSelectors = [
+      'button[aria-label*="mute" i]',
       'button[aria-label*="unmute" i]',
       'button[aria-label*="sound" i]',
       'button[aria-label*="audio" i]',
-      'button[aria-label*="mute" i]',
     ];
     for (const sel of muteSelectors) {
       const btn = document.querySelector(sel);

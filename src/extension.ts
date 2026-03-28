@@ -19,16 +19,24 @@ import { findChromePath, launchReelsWithCdp,
 import { BeatSync }                                   from './beatSync';
 import { ChameleonTheme }                             from './chameleon';
 import { SmartPause }                                 from './smartPause';
+import { SessionTimer }                               from './sessionTimer';
+import { KeyboardShortcuts }                          from './keyboardShortcuts';
+import { WatchHistory }                               from './watchHistory';
+import { FocusMode }                                  from './focusMode';
 import { PLATFORMS, DEFAULT_PLATFORM, PlatformId,
          PlatformConfig }                             from './platforms';
 
 // ── Global session state ─────────────────────────────────────────────────────
-let activeSession:    ReelsSession    | undefined;
-let activeWsServer:   WsFrameServer   | undefined;
-let activeBeatSync:   BeatSync        | undefined;
-let activeChameleon:  ChameleonTheme  | undefined;
-let activeSmartPause: SmartPause      | undefined;
-let activePlatform:   PlatformConfig  = PLATFORMS[DEFAULT_PLATFORM];
+let activeSession:     ReelsSession    | undefined;
+let activeWsServer:    WsFrameServer   | undefined;
+let activeBeatSync:    BeatSync        | undefined;
+let activeChameleon:   ChameleonTheme  | undefined;
+let activeSmartPause:  SmartPause      | undefined;
+let activeSessionTimer: SessionTimer   | undefined;
+let activeKeyboard:    KeyboardShortcuts | undefined;
+let activeWatchHistory: WatchHistory   | undefined;
+let activeFocusMode:   FocusMode       | undefined;
+let activePlatform:    PlatformConfig  = PLATFORMS[DEFAULT_PLATFORM];
 
 // Cached window.innerHeight read from Chrome via CDP.
 // This is the real rendered page height — used for snap scroll distance.
@@ -255,7 +263,8 @@ function getPlayerHtml(nonce: string, wsPort: number, pw: number = REMOTE_W, ph:
     <button id="btn-auto"  title="Auto-scroll to next reel when video ends">&#8635; Auto</button>
     <button id="btn-beat"  title="Beat Sync — VS Code pulses to the reel audio">&#9835; Beat</button>
     <button id="btn-cham"  title="Chameleon — VS Code colors match the reel">&#9680; Colors</button>
-    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart Pause</button>
+    <button id="btn-smart" title="Smart Pause — reel pauses while you type">&#9646;&#9646; Smart</button>
+    <button id="btn-focus" title="Focus Mode — hide distractions">&#128065; Focus</button>
     <button id="btn-close" title="Close Reels">&#10005;</button>
   </div>
   <div id="wrap">
@@ -293,6 +302,10 @@ function getPlayerHtml(nonce: string, wsPort: number, pw: number = REMOTE_W, ph:
     // Smart Pause toggle
     const btnSmart = document.getElementById('btn-smart');
     btnSmart.onclick = () => api.postMessage({command:'toggleSmartPause'});
+
+    // Focus Mode toggle
+    const btnFocus = document.getElementById('btn-focus');
+    btnFocus.onclick = () => api.postMessage({command:'toggleFocusMode'});
 
     // ── Producer/consumer JPEG decode pipeline ────────────────────────────
     let pending  = null;
@@ -356,7 +369,11 @@ function getPlayerHtml(nonce: string, wsPort: number, pw: number = REMOTE_W, ph:
       }
       if (e.data?.type==='smartPauseState') {
         btnSmart.classList.toggle('on', !!e.data.on);
-        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart Pause';
+        btnSmart.textContent = e.data.on ? '\u25AE\u25AE Smart: ON' : '\u25AE\u25AE Smart';
+      }
+      if (e.data?.type==='focusModeState') {
+        btnFocus.classList.toggle('on', !!e.data.on);
+        btnFocus.textContent = e.data.on ? '\uD83D\uDC41 Focus: ON' : '\uD83D\uDC41 Focus';
       }
     });
 
@@ -797,6 +814,14 @@ function toggleSmartPause(): void {
   }
 }
 
+async function toggleFocusMode(): Promise<void> {
+  if (!activeFocusMode) {
+    activeFocusMode = new FocusMode();
+  }
+  const isActive = await activeFocusMode.toggle();
+  void sidebarView?.webview.postMessage({ type:'focusModeState', on: isActive });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Screencast → WsFrameServer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -968,6 +993,15 @@ async function openReels(context: vscode.ExtensionContext, platformId?: Platform
       void vscode.window.showWarningMessage('Reels: Chrome disconnected.');
       closeReels();
     });
+
+    // Initialize new features
+    activeSessionTimer = new SessionTimer(30, 20);
+    activeSessionTimer.start();
+    
+    activeKeyboard = new KeyboardShortcuts(activeSession.cdp);
+    
+    activeWatchHistory = new WatchHistory(context);
+    
   } catch (err) {
     void vscode.window.showErrorMessage(
       'Instagram Reels: ' + (err instanceof Error ? err.message : String(err)),
@@ -987,6 +1021,18 @@ function closeReels(): void {
 
   activeSmartPause?.dispose();
   activeSmartPause = undefined;
+
+  activeSessionTimer?.dispose();
+  activeSessionTimer = undefined;
+
+  activeKeyboard?.dispose();
+  activeKeyboard = undefined;
+
+  activeWatchHistory?.dispose();
+  activeWatchHistory = undefined;
+
+  activeFocusMode?.dispose();
+  activeFocusMode = undefined;
 
   void sidebarView?.webview.postMessage({ type:'die' });
 
